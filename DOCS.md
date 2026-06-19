@@ -38,7 +38,9 @@ A full-window `<canvas>` driven by `requestAnimationFrame`. Each frame:
    line segment from its previous to current position.
 5. Draw blooms (radial-gradient glows) and shockwave rings.
 
-`DPR` is clamped to 2 so it stays sharp on hi-dpi screens without melting the GPU.
+`DPR` **supersamples** at 2× the device pixel ratio (capped at 3): the canvas
+renders more pixels than the screen has and the browser downscales, anti-aliasing
+the thin filaments. (If it ever feels heavy, drop the multiplier toward 1.5.)
 
 ### The flow field
 A small hand-rolled **value-noise** function (seeded, deterministic permutation
@@ -72,15 +74,21 @@ The breathing cycle is a two-phase state machine (`'flow'` → `'collapse'`):
   auto-triggers a big bang, resetting to flow.
 
 ### Booms (the audio-reactive pops)
-`boom(x, y, intensity)` fires at an **arbitrary location** in one of four randomly
-chosen styles, each with its own colour cast and a glow (`bloom`) at the site:
-- **0 — rings:** 1–3 clean-ish expanding shockwaves
-- **1 — starburst:** particles snap to the spot and fire out in rays (firework)
-- **2 — swirl:** tangential shove spins up a small vortex
-- **3 — jagged shards:** heavily wobbled, irregular rings
+`boom(x, y, intensity)` fires at an **arbitrary location** and draws a glow
+(`bloom`) plus a set of expanding shockwave rings, with the ring count and
+wobbliness varying by a random style (clean rings vs. heavily-wobbled jagged
+shards, etc.) and bigger hits adding an extra bold shock ring.
 
 Rings aren't perfect circles — `makeRing()` precomputes a per-vertex **wobble**
 array so each is drawn as a slightly organic closed path.
+
+> **Important design rule — booms are pure overlay graphics.** A boom is *only*
+> rings + glow. It must **never** touch the particles, shake the canvas, or shift
+> the global `hue` — all of those make the swirly field jolt/recolour on the beat
+> (the canvas-shake one is especially sneaky: it displaces trails mid-draw so they
+> look like they shatter, while particle data stays clean). The field stays a calm,
+> constant-speed twirl at all times; **booms float over it as the only thing that
+> reacts to music.** See the audio section.
 
 ### Audio reactivity
 Two capture sources feed one analyser pipeline (`startAnalyser`):
@@ -103,13 +111,17 @@ Two gates stop false triggers and tune the feel:
   firing on every transient.
 
 **Boom size scales with contrast.** `intensity = (flux / baseline)` shaped by a
-power curve (capped at 3.5): a minor tick → a small boom, a big bass drop → a much
-larger one (more particles, bigger glow, an extra bold shock ring, stronger shake).
-A genuine bass drop (bass band spikes too) escalates all the way to a full big bang.
+power curve (capped at 3.5): a minor tick → a small boom (smaller glow, fewer
+rings), a big hit → a much larger one (bigger glow, an extra bold shock ring).
+Contrast scales the *boom*, never the field.
 
-Overall loudness (`levelSmooth`) continuously drives flow **speed** and stroke
-**brightness**, so the field visibly tracks the music every moment — booms are the
-accents on top.
+**The field is fully decoupled from the music — by design.** Every musical beat
+calls only `boom()`; nothing in the audio path writes `shake`, `hue`, `bang`,
+particle velocity, line width, or flow speed. `bigBang()` (the full particle-
+flinging explosion) is reachable **only** from the **B** key and the idle breathing
+cycle — never from a beat. So the swirly field looks identical whether music is
+playing or not; only the ring/glow booms come and go. (This took some doing — see
+the design rule under *Booms*.)
 
 ---
 
