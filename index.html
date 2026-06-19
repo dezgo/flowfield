@@ -370,7 +370,7 @@ function step() {
   ctx.fillStyle = 'rgba(5, 6, 10, 0.055)';
   ctx.fillRect(-30, -30, W + 60, H + 60);
   ctx.globalCompositeOperation = 'lighter';
-  ctx.lineWidth = 0.85 + bang * 1.4 + levelSmooth * 1.8;  // finer filaments at rest; thicken with music
+  ctx.lineWidth = 0.9 + bang * 1.4;   // constant fine filaments (bang = full big-bang only)
   if (bang > 0) bang *= 0.965;        // explosion energy decays back toward the flow field
 
   const cx = W / 2, cy = H / 2;
@@ -380,9 +380,10 @@ function step() {
     // flow field angle from layered noise, slowly evolving in time
     const n = noise(p.x * SCALE, p.y * SCALE + t * 0.0009);
     const angle = n * Math.PI * 3;
-    const drive = SPEED * (1 + levelSmooth * 1.7);  // louder music -> faster flow
-    let ax = Math.cos(angle) * drive;
-    let ay = Math.sin(angle) * drive;
+    // constant calm flow — loudness must NOT speed particles up, or smooth trails
+    // stretch into broken dashed streaks on the beat. The beat shows via booms only.
+    let ax = Math.cos(angle) * SPEED;
+    let ay = Math.sin(angle) * SPEED;
 
     // during a big bang the flow field gives way to raw outward momentum
     if (bang > 0.01) { ax *= (1 - bang); ay *= (1 - bang); }
