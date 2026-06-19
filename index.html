@@ -40,7 +40,7 @@
 <body>
 <canvas id="c"></canvas>
 <div id="mic"><span class="dot"></span><span id="micLabel">listening to the room</span></div>
-<div id="hint">move to steer &nbsp;·&nbsp; <b>click</b> burst &nbsp;·&nbsp; <b>b</b> big bang &nbsp;·&nbsp; <b>m</b> mic / music mode &nbsp;·&nbsp; <b>space</b> palette</div>
+<div id="hint">move to steer &nbsp;·&nbsp; <b>click</b> burst &nbsp;·&nbsp; <b>b</b> big bang &nbsp;·&nbsp; <b>m</b> mic &nbsp;·&nbsp; <b>s</b> this computer's audio &nbsp;·&nbsp; <b>space</b> palette</div>
 
 <script>
 const canvas = document.getElementById('c');
@@ -121,6 +121,8 @@ let beatCooldown = 0, bigCooldown = 0;
 let prevSpectrum = null;  // last frame's spectrum, for spectral-flux onset detection
 let fluxAvg = 0;          // adaptive baseline for the flux (beat threshold)
 let ambient = 0;          // tracked room noise floor — beats must rise clearly above it
+let captureMode = null;   // 'mic' | 'system' | null
+let captureStream = null; // active MediaStream, so we can stop it on toggle-off
 
 function spawn(p) {
   p.x = Math.random() * W;
@@ -206,36 +208,72 @@ function boom(x, y, intensity) {
   }
 }
 
-// --- mic capture: tap into the room's audio and react to it ---
+// --- audio capture: react to either the room (mic) or this machine's audio ---
 const micEl = document.getElementById('mic');
 const micLabel = document.getElementById('micLabel');
+
+// stop whatever's currently capturing and reset the indicator
+function stopCapture() {
+  if (captureStream) captureStream.getTracks().forEach(t => t.stop());
+  captureStream = null;
+  captureMode = null;
+  micActive = false;
+  micEl.classList.remove('show', 'err');
+}
+
+// wire a stream's audio into the analyser and start reacting
+function startAnalyser(stream, mode, label) {
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.smoothingTimeConstant = 0.7;
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+  prevSpectrum = new Uint8Array(analyser.frequencyBinCount);
+  src.connect(analyser);
+  captureStream = stream;
+  captureMode = mode;
+  micActive = true;
+  bassAvg = 0; levelSmooth = 0; fluxAvg = 0; ambient = 0;
+  // if the user stops the share / unplugs, clean up
+  stream.getTracks().forEach(tr => tr.addEventListener('ended', stopCapture));
+  micEl.classList.remove('err');
+  micLabel.textContent = label;
+  micEl.classList.add('show');
+}
+
+// M — listen to the room via the microphone
 async function toggleMic() {
-  if (micActive) {
-    micActive = false;
-    micEl.classList.remove('show');
-    return;
-  }
+  if (captureMode === 'mic') { stopCapture(); return; }
+  stopCapture();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') await audioCtx.resume();
-    const src = audioCtx.createMediaStreamSource(stream);
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.7;
-    freqData = new Uint8Array(analyser.frequencyBinCount);
-    prevSpectrum = new Uint8Array(analyser.frequencyBinCount);
-    src.connect(analyser);
-    micActive = true;
-    bassAvg = 0; levelSmooth = 0; fluxAvg = 0; ambient = 0;
-    micEl.classList.remove('err');
-    micLabel.textContent = 'listening to the room';
-    micEl.classList.add('show');
+    startAnalyser(stream, 'mic', 'listening to the room');
   } catch (err) {
     micEl.classList.add('show', 'err');
     micLabel.textContent = 'mic blocked — allow access (or serve over http)';
+  }
+}
+
+// S — capture this computer's audio directly (tab / system audio)
+async function toggleSystem() {
+  if (captureMode === 'system') { stopCapture(); return; }
+  stopCapture();
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    if (stream.getAudioTracks().length === 0) {           // user forgot to tick "share audio"
+      stream.getTracks().forEach(t => t.stop());
+      micEl.classList.add('show', 'err');
+      micLabel.textContent = 'no audio shared — re-pick and tick "share tab/system audio"';
+      return;
+    }
+    startAnalyser(stream, 'system', "capturing this computer's audio");
+  } catch (err) {
+    micEl.classList.add('show', 'err');
+    micLabel.textContent = 'audio capture cancelled or unavailable';
   }
 }
 
@@ -453,6 +491,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'Space') { hue = (hue + 60) % 360; e.preventDefault(); }
   if (e.code === 'KeyB') { bigBang(); fadeHint(); }
   if (e.code === 'KeyM') { toggleMic(); fadeHint(); }
+  if (e.code === 'KeyS') { toggleSystem(); fadeHint(); }
 });
 
 let hintFaded = false;
