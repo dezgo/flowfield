@@ -20,6 +20,8 @@ CSS, and vanilla JS, no build step.
 | **M**        | Mic mode — react to the room / an external speaker                 |
 | **S**        | Capture this computer's audio directly (tab / system audio)        |
 | **Space**    | Shift the colour palette                                           |
+| **F**        | Toggle fullscreen (for the party monitor)                          |
+| **H** / **?**| Show/hide the controls legend                                      |
 
 Left untouched it runs an automatic **breathing cycle**: drift → gravity collapse
 → big bang → repeat.
