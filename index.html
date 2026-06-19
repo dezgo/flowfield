@@ -48,9 +48,10 @@ const ctx = canvas.getContext('2d');
 let W, H, DPR;
 
 function resize() {
-  // Mild supersample (1.5x device pixels, capped at 2) — smooths the filaments
-  // without the frame-rate hit of 2-3x. Density (NUM) does most of the "fine" work.
-  DPR = Math.min((window.devicePixelRatio || 1) * 1.5, 2);
+  // Supersample: render at 2x the device's pixels (capped at 3 for perf) and let
+  // the browser downscale -> ultra-crisp, anti-aliased filaments. This is what
+  // gives the fine "hi-tech" look beyond plain native resolution.
+  DPR = Math.min((window.devicePixelRatio || 1) * 2, 3);
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = W * DPR; canvas.height = H * DPR;
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
@@ -366,7 +367,7 @@ function step() {
   ctx.fillStyle = 'rgba(5, 6, 10, 0.055)';
   ctx.fillRect(-30, -30, W + 60, H + 60);
   ctx.globalCompositeOperation = 'lighter';
-  ctx.lineWidth = 0.9 + bang * 1.4;   // constant fine filaments (bang = full big-bang only)
+  ctx.lineWidth = 0.85 + bang * 1.4 + levelSmooth * 1.8;  // finer filaments at rest; thicken with music
   if (bang > 0) bang *= 0.965;        // explosion energy decays back toward the flow field
 
   const cx = W / 2, cy = H / 2;
@@ -376,8 +377,9 @@ function step() {
     // flow field angle from layered noise, slowly evolving in time
     const n = noise(p.x * SCALE, p.y * SCALE + t * 0.0009);
     const angle = n * Math.PI * 3;
-    let ax = Math.cos(angle) * SPEED;   // constant calm flow; the beat shows via booms, not speed
-    let ay = Math.sin(angle) * SPEED;
+    const drive = SPEED * (1 + levelSmooth * 1.7);  // louder music -> faster flow
+    let ax = Math.cos(angle) * drive;
+    let ay = Math.sin(angle) * drive;
 
     // during a big bang the flow field gives way to raw outward momentum
     if (bang > 0.01) { ax *= (1 - bang); ay *= (1 - bang); }
