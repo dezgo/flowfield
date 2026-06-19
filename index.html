@@ -102,7 +102,8 @@ let hue = 200;            // base palette hue
 let t = 0;
 let bang = 0;             // big-bang energy, 1 -> 0; while >0 the flow field yields to the explosion
 let shake = 0;            // screen-shake energy, decays each frame
-const rings = [];         // expanding aftershock shockwaves
+const rings = [];         // expanding aftershock shockwaves (each carries its own x,y + wobble)
+const blooms = [];        // hot glows at arbitrary boom sites
 
 // breathing cycle: drift in the field, then gravity drags everything home, then bang
 let phase = 'flow';       // 'flow' | 'collapse'
@@ -114,9 +115,11 @@ const COLLAPSE_FRAMES = 150;
 // --- audio / mic reactivity ---
 let micActive = false;
 let audioCtx, analyser, freqData;
-let bassAvg = 0;          // adaptive baseline for beat detection
+let bassAvg = 0;          // adaptive baseline for the bass band (classifies big drops)
 let levelSmooth = 0;      // overall loudness, smoothed -> drives field energy
 let beatCooldown = 0, bigCooldown = 0;
+let prevSpectrum = null;  // last frame's spectrum, for spectral-flux onset detection
+let fluxAvg = 0;          // adaptive baseline for the flux (beat threshold)
 
 function spawn(p) {
   p.x = Math.random() * W;
@@ -145,26 +148,60 @@ function bigBang() {
   bang = 1;
   shake = 1;
   hue = (hue + 47) % 360;
-  // three staggered shockwave rings
+  // three staggered shockwave rings from the core
   rings.length = 0;
-  for (let k = 0; k < 3; k++) rings.push({ r: 0, alpha: 1, delay: k * 9 });
+  for (let k = 0; k < 3; k++) rings.push(makeRing(cx, cy, 1, k * 9, 0.05 + k * 0.02, 0));
   // reset the breathing cycle back to drift
   phase = 'flow'; phaseT = 0; collapse = 0;
 }
 
-// a beat-driven pop: shockwave ring + outward pump from centre, scaled by loudness
-function pulse(intensity) {
-  shake = Math.max(shake, 0.4 * intensity);
-  bang = Math.max(bang, 0.22 * intensity);   // brief bloom + brighter strokes
-  rings.push({ r: 0, alpha: Math.min(1, 0.55 * intensity), delay: 0 });
-  hue = (hue + 7 * intensity) % 360;
-  const cx = W / 2, cy = H / 2;
-  const n = (35 * intensity) | 0;
+// build a shockwave ring with an organic wobble so it isn't a perfect circle
+function makeRing(x, y, alpha, delay, wobbleAmp, hueShift) {
+  const pts = 28;
+  const wob = new Array(pts);
+  for (let i = 0; i < pts; i++) wob[i] = (Math.random() * 2 - 1) * wobbleAmp;
+  return { x, y, r: 0, alpha, delay, wob, hueShift: hueShift || 0, speed: 9 + Math.random() * 7 };
+}
+
+// a beat-driven boom at an arbitrary spot, in one of several randomised styles
+function boom(x, y, intensity) {
+  const type = (Math.random() * 4) | 0;       // 0 rings · 1 starburst · 2 swirl · 3 jagged shards
+  const bhue = (hue + (Math.random() * 80 - 40) + 360) % 360;   // its own colour cast
+  hue = (hue + 5 * intensity) % 360;
+  shake = Math.max(shake, 0.28 * intensity);
+
+  // a hot glow at the boom site, size jittered
+  blooms.push({
+    x, y, rad: (60 + 90 * intensity) * (0.7 + Math.random() * 0.7),
+    alpha: Math.min(1, 0.5 * intensity), decay: 0.9, hue: bhue
+  });
+
+  // rings: how many + how wobbly depends on the style
+  let ringCount, wobbleAmp;
+  if (type === 0)      { ringCount = 1 + ((Math.random() * 3) | 0); wobbleAmp = 0.04 + Math.random() * 0.05; }
+  else if (type === 3) { ringCount = 1 + ((Math.random() * 2) | 0); wobbleAmp = 0.13 + Math.random() * 0.13; }
+  else                 { ringCount = Math.random() < 0.5 ? 1 : 0;   wobbleAmp = 0.06 + Math.random() * 0.08; }
+  for (let k = 0; k < ringCount; k++) {
+    rings.push(makeRing(x, y, Math.min(1, 0.5 * intensity),
+      k * (5 + ((Math.random() * 9) | 0)), wobbleAmp, ((Math.random() * 40 - 20)) | 0));
+  }
+
+  // particle pump: style decides how the particles react
+  const n = (28 * intensity) | 0;
   for (let i = 0; i < n; i++) {
     const p = particles[(Math.random() * NUM) | 0];
-    const dx = p.x - cx, dy = p.y - cy, d = Math.hypot(dx, dy) + 0.001;
-    const r = 4 + Math.random() * 6 * intensity;
-    p.vx += (dx / d) * r; p.vy += (dy / d) * r;
+    const dx = p.x - x, dy = p.y - y, d = Math.hypot(dx, dy) + 0.001;
+    const ux = dx / d, uy = dy / d;
+    const r = 4 + Math.random() * 7 * intensity;
+    if (type === 1) {            // starburst: snap to the site, fire out in clean rays
+      const a = Math.random() * Math.PI * 2;
+      p.x = x; p.y = y; p.px = x; p.py = y;
+      p.vx = Math.cos(a) * r * 1.7; p.vy = Math.sin(a) * r * 1.7;
+    } else if (type === 2) {     // swirl: tangential shove -> spinning vortex
+      p.vx += ux * r * 0.4 - uy * r; p.vy += uy * r * 0.4 + ux * r;
+    } else {                     // radial pump outward from the site
+      p.vx += ux * r; p.vy += uy * r;
+    }
   }
 }
 
@@ -188,9 +225,10 @@ async function toggleMic() {
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.7;
     freqData = new Uint8Array(analyser.frequencyBinCount);
+    prevSpectrum = new Uint8Array(analyser.frequencyBinCount);
     src.connect(analyser);
     micActive = true;
-    bassAvg = 0; levelSmooth = 0;
+    bassAvg = 0; levelSmooth = 0; fluxAvg = 0;
     micEl.classList.remove('err');
     micLabel.textContent = 'listening to the room';
     micEl.classList.add('show');
@@ -200,21 +238,49 @@ async function toggleMic() {
   }
 }
 
-// read the spectrum each frame; detect beats; feed energy into the visuals
+// read the spectrum each frame; detect beats via spectral flux; feed energy in
 function readAudio() {
   if (!micActive || !analyser) return;
   analyser.getByteFrequencyData(freqData);
-  let bass = 0; for (let i = 1; i <= 8; i++) bass += freqData[i]; bass /= 8;
-  let lvl = 0;  for (let i = 0; i < 64; i++) lvl += freqData[i]; lvl /= 64;
+  const N = freqData.length;
+
+  // overall loudness -> drives flow speed + brightness
+  let lvl = 0; for (let i = 0; i < 64; i++) lvl += freqData[i]; lvl /= 64;
   levelSmooth = levelSmooth * 0.85 + (lvl / 255) * 0.15;
+
+  // bass band -> used only to flag the rare "big drop"
+  let bass = 0; for (let i = 1; i <= 10; i++) bass += freqData[i]; bass /= 10;
   bassAvg = bassAvg * 0.94 + bass * 0.06;
+
+  // spectral flux: sum of positive energy jumps across a broad band.
+  // This catches beats from any source — tinny phone speakers, voice, real bass.
+  let flux = 0;
+  const hi = Math.min(N, 220);                 // ~47 Hz .. ~10 kHz
+  for (let i = 1; i < hi; i++) {
+    const d = freqData[i] - prevSpectrum[i];
+    if (d > 0) flux += d;
+  }
+  prevSpectrum.set(freqData);
+  fluxAvg = fluxAvg * 0.92 + flux * 0.08;
+
   if (beatCooldown > 0) beatCooldown--;
   if (bigCooldown > 0) bigCooldown--;
-  // a beat = bass spikes well above its recent baseline
-  if (bass > 26 && bass > bassAvg * 1.4 && beatCooldown <= 0) {
-    const intensity = Math.min(2.4, bass / (bassAvg + 1));
-    if (intensity > 1.9 && bigCooldown <= 0) { bigBang(); bigCooldown = 75; }
-    else pulse(intensity);
+
+  // a beat = a flux spike well above its recent baseline (with a floor so silence
+  // doesn't trigger on noise)
+  if (flux > 140 && flux > fluxAvg * 1.3 && beatCooldown <= 0) {
+    const intensity = Math.min(2.4, flux / (fluxAvg + 1));
+    const bigDrop = bass > bassAvg * 1.5 && bass > 30;
+    if (bigDrop && intensity > 1.6 && bigCooldown <= 0) {
+      bigBang(); bigCooldown = 110;            // rare full-screen reset on big bass drops
+    } else {
+      // boom at a random spot (kept off the very edges)
+      const bx = W * (0.12 + Math.random() * 0.76);
+      const by = H * (0.12 + Math.random() * 0.76);
+      boom(bx, by, intensity);
+    }
+    // active music keeps deferring the auto-collapse; silence lets it fire
+    phase = 'flow'; phaseT = 0;
     beatCooldown = 8;
   }
 }
@@ -233,8 +299,9 @@ function step() {
   phaseT++;
   if (phase === 'flow') {
     collapse = 0;
-    // while the music drives things, skip the automatic inhale/bang
-    if (phaseT > FLOW_FRAMES && !micActive) { phase = 'collapse'; phaseT = 0; }
+    // auto-inhale after a quiet stretch (each beat resets phaseT, so this only
+    // fires when music pauses — or always, when the mic is off)
+    if (phaseT > FLOW_FRAMES) { phase = 'collapse'; phaseT = 0; }
   } else { // collapse
     collapse = Math.min(1, phaseT / COLLAPSE_FRAMES);
     if (phaseT > COLLAPSE_FRAMES) { bigBang(); }   // bigBang resets phase -> flow
@@ -302,7 +369,7 @@ function step() {
     }
   }
 
-  // --- central bloom: a hot glow at the core that fades with the blast ---
+  // --- central bloom for the full big-bang (core flash that fades) ---
   if (bang > 0.02) {
     const rad = 220 * bang;
     const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
@@ -313,15 +380,36 @@ function step() {
     ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2); ctx.fill();
   }
 
-  // --- aftershock rings: staggered shockwaves expanding from the core ---
+  // --- blooms: hot glows at each boom site ---
+  for (let k = blooms.length - 1; k >= 0; k--) {
+    const b = blooms[k];
+    b.alpha *= b.decay;
+    if (b.alpha < 0.02) { blooms.splice(k, 1); continue; }
+    const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.rad);
+    g.addColorStop(0, `hsla(${b.hue}, 100%, 80%, ${0.55 * b.alpha})`);
+    g.addColorStop(0.4, `hsla(${b.hue}, 95%, 60%, ${0.2 * b.alpha})`);
+    g.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.rad, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // --- aftershock rings: wobbly shockwaves expanding from each boom site ---
   for (let k = rings.length - 1; k >= 0; k--) {
     const ring = rings[k];
     if (ring.delay > 0) { ring.delay--; continue; }
-    ring.r += 11;
-    ring.alpha *= 0.955;
+    ring.r += ring.speed;
+    ring.alpha *= 0.95;
     ctx.lineWidth = 2.5 * ring.alpha + 0.5;
-    ctx.strokeStyle = `hsla(${hue}, 90%, 70%, ${ring.alpha * 0.7})`;
-    ctx.beginPath(); ctx.arc(cx, cy, ring.r, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = `hsla(${(hue + ring.hueShift + 360) % 360}, 90%, 70%, ${ring.alpha * 0.7})`;
+    ctx.beginPath();
+    const pts = ring.wob.length;
+    for (let i = 0; i <= pts; i++) {
+      const a = (i % pts) / pts * Math.PI * 2;
+      const rr = ring.r * (1 + ring.wob[i % pts]);
+      const px = ring.x + Math.cos(a) * rr, py = ring.y + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
     if (ring.alpha < 0.03 || ring.r > Math.hypot(W, H)) rings.splice(k, 1);
   }
 
