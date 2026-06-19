@@ -173,8 +173,9 @@ function makeRing(x, y, alpha, delay, wobbleAmp, hueShift) {
 function boom(x, y, intensity) {
   const type = (Math.random() * 4) | 0;       // 0 rings · 1 starburst · 2 swirl · 3 jagged shards
   const bhue = (hue + (Math.random() * 80 - 40) + 360) % 360;   // its own colour cast
-  hue = (hue + 5 * intensity) % 360;
-  shake = Math.max(shake, Math.min(0.75, 0.26 * intensity));    // capped so big hits don't nauseate
+  // NOTE: a boom must NOT shake the screen or shift the global hue — both would
+  // make the whole field (the swirly lines) jolt/recolour on the beat. The boom's
+  // colour lives in bhue (rings/glow only); the field is left completely alone.
 
   // a hot glow at the boom site, size jittered
   blooms.push({
