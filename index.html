@@ -40,7 +40,7 @@
 <body>
 <canvas id="c"></canvas>
 <div id="mic"><span class="dot"></span><span id="micLabel">listening to the room</span></div>
-<div id="hint">move to steer &nbsp;·&nbsp; <b>click</b> burst &nbsp;·&nbsp; <b>b</b> big bang &nbsp;·&nbsp; <b>m</b> mic &nbsp;·&nbsp; <b>s</b> this computer's audio &nbsp;·&nbsp; <b>space</b> palette</div>
+<div id="hint">move to steer &nbsp;·&nbsp; <b>click</b> burst &nbsp;·&nbsp; <b>b</b> big bang &nbsp;·&nbsp; <b>m</b> mic &nbsp;·&nbsp; <b>s</b> this computer's audio &nbsp;·&nbsp; <b>space</b> palette &nbsp;·&nbsp; <b>h</b> show/hide this</div>
 
 <script>
 const canvas = document.getElementById('c');
@@ -506,6 +506,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyB') { bigBang(); fadeHint(); }
   if (e.code === 'KeyM') { toggleMic(); fadeHint(); }
   if (e.code === 'KeyS') { toggleSystem(); fadeHint(); }
+  if (e.code === 'KeyH' || e.key === '?') document.getElementById('hint').classList.toggle('fade');
 });
 
 let hintFaded = false;
