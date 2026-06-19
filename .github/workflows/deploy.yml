@@ -29,6 +29,6 @@ jobs:
           rsync -avz --delete \
             --exclude='.git' \
             --exclude='.github' \
-            --exclude='README.md' \
+            --exclude='*.md' \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
             ./ "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/flowfield/"

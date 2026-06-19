@@ -29,3 +29,12 @@ python -m http.server 8000
 Left to itself it runs an automatic "breathing" cycle: drift → gravity collapse
 → big bang → repeat. In music mode the beats drive it instead — bass drops
 trigger bangs and overall loudness makes the whole field surge.
+
+Press **S** to react to this computer's audio directly (tab / system audio) —
+cleaner than the mic and works with headphones.
+
+## More
+
+See [DOCS.md](DOCS.md) for how it all works — the flow field, particle system,
+big-bang breathing cycle, audio/beat detection, tuning knobs, and the
+deployment / CI setup.

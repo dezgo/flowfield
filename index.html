@@ -171,7 +171,7 @@ function boom(x, y, intensity) {
   const type = (Math.random() * 4) | 0;       // 0 rings · 1 starburst · 2 swirl · 3 jagged shards
   const bhue = (hue + (Math.random() * 80 - 40) + 360) % 360;   // its own colour cast
   hue = (hue + 5 * intensity) % 360;
-  shake = Math.max(shake, 0.28 * intensity);
+  shake = Math.max(shake, Math.min(0.75, 0.26 * intensity));    // capped so big hits don't nauseate
 
   // a hot glow at the boom site, size jittered
   blooms.push({
@@ -188,6 +188,8 @@ function boom(x, y, intensity) {
     rings.push(makeRing(x, y, Math.min(1, 0.5 * intensity),
       k * (5 + ((Math.random() * 9) | 0)), wobbleAmp, ((Math.random() * 40 - 20)) | 0));
   }
+  // a bold, near-clean shock ring punctuates the big hits
+  if (intensity > 2.2) rings.push(makeRing(x, y, 1, 0, 0.03 + Math.random() * 0.04, 0));
 
   // particle pump: style decides how the particles react
   const n = (28 * intensity) | 0;
@@ -314,7 +316,10 @@ function readAudio() {
   // a beat = sound clearly above the room floor AND a solid flux spike.
   // (1.6 ratio favours punchy onsets over every little hi-hat/tick)
   if (loud && flux > fluxAvg * 1.6 && beatCooldown <= 0) {
-    const intensity = Math.min(2.4, flux / (fluxAvg + 1));
+    // intensity scales with CONTRAST (how far the spike sits above the recent
+    // baseline). Power curve widens the range: minor ticks ~1, big drops ~3.5.
+    const ratio = flux / (fluxAvg + 1);
+    const intensity = Math.min(3.5, Math.pow(ratio / 1.6, 1.3));
     const bigDrop = bass > bassAvg * 1.5 && bass > 30;
     if (bigDrop && intensity > 1.6 && bigCooldown <= 0) {
       bigBang(); bigCooldown = 110;            // rare full-screen reset on big bass drops
