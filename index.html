@@ -273,8 +273,9 @@ function readAudio() {
   if (beatCooldown > 0) beatCooldown--;
   if (bigCooldown > 0) bigCooldown--;
 
-  // a beat = sound is clearly above the room floor AND flux spikes above baseline
-  if (loud && flux > fluxAvg * 1.4 && beatCooldown <= 0) {
+  // a beat = sound clearly above the room floor AND a solid flux spike.
+  // (1.6 ratio favours punchy onsets over every little hi-hat/tick)
+  if (loud && flux > fluxAvg * 1.6 && beatCooldown <= 0) {
     const intensity = Math.min(2.4, flux / (fluxAvg + 1));
     const bigDrop = bass > bassAvg * 1.5 && bass > 30;
     if (bigDrop && intensity > 1.6 && bigCooldown <= 0) {
@@ -287,7 +288,7 @@ function readAudio() {
     }
     // active music keeps deferring the auto-collapse; silence lets it fire
     phase = 'flow'; phaseT = 0;
-    beatCooldown = 8;
+    beatCooldown = 14;     // min spacing between booms (~4/sec max)
   }
 }
 
