@@ -194,20 +194,23 @@ function boom(x, y, intensity) {
   // a bold, near-clean shock ring punctuates the big hits
   if (intensity > 2.2) rings.push(makeRing(x, y, 1, 0, 0.03 + Math.random() * 0.04, 0));
 
-  // particle pump: style decides how the particles react
-  const n = (28 * intensity) | 0;
-  for (let i = 0; i < n; i++) {
-    const p = particles[(Math.random() * NUM) | 0];
-    const dx = p.x - x, dy = p.y - y, d = Math.hypot(dx, dy) + 0.001;
+  // particle pump: only nudge particles NEAR the boom (with falloff), so the rest
+  // of the field keeps twirling undisturbed — no screen-wide crackle on the beat
+  const R = 150 + 130 * intensity;     // local influence radius
+  const R2 = R * R;
+  for (let i = 0; i < NUM; i++) {
+    const p = particles[i];
+    const dx = p.x - x, dy = p.y - y, d2 = dx * dx + dy * dy;
+    if (d2 > R2) continue;
+    const d = Math.sqrt(d2) + 0.001;
     const ux = dx / d, uy = dy / d;
-    const r = 4 + Math.random() * 7 * intensity;
-    if (type === 1) {            // starburst: snap to the site, fire out in clean rays
-      const a = Math.random() * Math.PI * 2;
-      p.x = x; p.y = y; p.px = x; p.py = y;
-      p.vx = Math.cos(a) * r * 1.7; p.vy = Math.sin(a) * r * 1.7;
-    } else if (type === 2) {     // swirl: tangential shove -> spinning vortex
+    const fall = 1 - d / R;             // stronger near the centre, fades to nothing at the edge
+    const r = (3 + Math.random() * 5 * intensity) * fall;
+    if (type === 1) {                   // starburst: fire nearby particles outward in rays
+      p.vx += ux * r * 1.8; p.vy += uy * r * 1.8;
+    } else if (type === 2) {            // swirl: tangential shove -> local vortex
       p.vx += ux * r * 0.4 - uy * r; p.vy += uy * r * 0.4 + ux * r;
-    } else {                     // radial pump outward from the site
+    } else {                            // radial pump outward from the site
       p.vx += ux * r; p.vy += uy * r;
     }
   }
