@@ -48,7 +48,10 @@ const ctx = canvas.getContext('2d');
 let W, H, DPR;
 
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  // Supersample: render at 2x the device's pixels (capped at 3 for perf) and let
+  // the browser downscale -> ultra-crisp, anti-aliased filaments. This is what
+  // gives the fine "hi-tech" look beyond plain native resolution.
+  DPR = Math.min((window.devicePixelRatio || 1) * 2, 3);
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = W * DPR; canvas.height = H * DPR;
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
@@ -364,7 +367,7 @@ function step() {
   ctx.fillStyle = 'rgba(5, 6, 10, 0.055)';
   ctx.fillRect(-30, -30, W + 60, H + 60);
   ctx.globalCompositeOperation = 'lighter';
-  ctx.lineWidth = 1.1 + bang * 1.4 + levelSmooth * 2.2;   // louder music -> brighter strokes
+  ctx.lineWidth = 0.85 + bang * 1.4 + levelSmooth * 1.8;  // finer filaments at rest; thicken with music
   if (bang > 0) bang *= 0.965;        // explosion energy decays back toward the flow field
 
   const cx = W / 2, cy = H / 2;
