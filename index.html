@@ -120,6 +120,7 @@ let levelSmooth = 0;      // overall loudness, smoothed -> drives field energy
 let beatCooldown = 0, bigCooldown = 0;
 let prevSpectrum = null;  // last frame's spectrum, for spectral-flux onset detection
 let fluxAvg = 0;          // adaptive baseline for the flux (beat threshold)
+let ambient = 0;          // tracked room noise floor — beats must rise clearly above it
 
 function spawn(p) {
   p.x = Math.random() * W;
@@ -228,7 +229,7 @@ async function toggleMic() {
     prevSpectrum = new Uint8Array(analyser.frequencyBinCount);
     src.connect(analyser);
     micActive = true;
-    bassAvg = 0; levelSmooth = 0; fluxAvg = 0;
+    bassAvg = 0; levelSmooth = 0; fluxAvg = 0; ambient = 0;
     micEl.classList.remove('err');
     micLabel.textContent = 'listening to the room';
     micEl.classList.add('show');
@@ -263,12 +264,17 @@ function readAudio() {
   prevSpectrum.set(freqData);
   fluxAvg = fluxAvg * 0.92 + flux * 0.08;
 
+  // track the ambient noise floor: drops quickly toward quiet, creeps up slowly.
+  // It settles just above true silence, so music sits clearly above it.
+  if (levelSmooth < ambient) ambient = ambient * 0.9 + levelSmooth * 0.1;
+  else ambient = ambient * 0.999 + levelSmooth * 0.001;
+  const loud = levelSmooth > ambient + 0.025;   // is anything actually playing?
+
   if (beatCooldown > 0) beatCooldown--;
   if (bigCooldown > 0) bigCooldown--;
 
-  // a beat = a flux spike well above its recent baseline (with a floor so silence
-  // doesn't trigger on noise)
-  if (flux > 140 && flux > fluxAvg * 1.3 && beatCooldown <= 0) {
+  // a beat = sound is clearly above the room floor AND flux spikes above baseline
+  if (loud && flux > fluxAvg * 1.4 && beatCooldown <= 0) {
     const intensity = Math.min(2.4, flux / (fluxAvg + 1));
     const bigDrop = bass > bassAvg * 1.5 && bass > 30;
     if (bigDrop && intensity > 1.6 && bigCooldown <= 0) {
