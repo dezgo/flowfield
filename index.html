@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flow Field — move your mouse</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #05060a; cursor: crosshair;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  canvas { display: block; }
+  #hint {
+    position: fixed; bottom: 18px; left: 0; right: 0;
+    text-align: center; color: rgba(255,255,255,0.35);
+    font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
+    pointer-events: none; user-select: none;
+    transition: opacity 1.2s ease; opacity: 1;
+  }
+  #hint.fade { opacity: 0; }
+  #hint b { color: rgba(255,255,255,0.6); font-weight: 600; }
+  #mic {
+    position: fixed; top: 16px; left: 18px;
+    color: rgba(255,255,255,0.5); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; pointer-events: none; user-select: none;
+    opacity: 0; transition: opacity 0.5s ease;
+  }
+  #mic.show { opacity: 1; }
+  #mic .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #ff4d6d; margin-right: 8px; vertical-align: middle;
+    box-shadow: 0 0 8px #ff4d6d; animation: pulse 1.1s ease-in-out infinite;
+  }
+  #mic.err { color: rgba(255,160,160,0.7); }
+  #mic.err .dot { background: #888; box-shadow: none; animation: none; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="mic"><span class="dot"></span><span id="micLabel">listening to the room</span></div>
+<div id="hint">move to steer &nbsp;·&nbsp; <b>click</b> burst &nbsp;·&nbsp; <b>b</b> big bang &nbsp;·&nbsp; <b>m</b> mic / music mode &nbsp;·&nbsp; <b>space</b> palette</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H, DPR;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  // paint background fresh on resize
+  ctx.fillStyle = '#05060a';
+  ctx.fillRect(0, 0, W, H);
+}
+window.addEventListener('resize', resize);
+
+// --- lightweight value-noise flow field ----------------------------------
+const perm = new Uint8Array(512);
+(function seed() {
+  const p = Array.from({length: 256}, (_, i) => i);
+  let s = 1337;
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 255; i > 0; i--) {
+    const j = (rnd() * (i + 1)) | 0;
+    [p[i], p[j]] = [p[j], p[i]];
+  }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+})();
+const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+const lerp = (a, b, t) => a + t * (b - a);
+function grad(h, x, y) {
+  switch (h & 3) {
+    case 0: return  x + y; case 1: return -x + y;
+    case 2: return  x - y; default: return -x - y;
+  }
+}
+function noise(x, y) {
+  const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+  x -= Math.floor(x); y -= Math.floor(y);
+  const u = fade(x), v = fade(y);
+  const aa = perm[perm[X] + Y], ab = perm[perm[X] + Y + 1];
+  const ba = perm[perm[X + 1] + Y], bb = perm[perm[X + 1] + Y + 1];
+  return lerp(
+    lerp(grad(aa, x, y),     grad(ba, x - 1, y),     u),
+    lerp(grad(ab, x, y - 1), grad(bb, x - 1, y - 1), u),
+    v
+  );
+}
+
+// --- particles ------------------------------------------------------------
+const NUM = 1400;
+const SCALE = 0.0016;     // flow field zoom
+const SPEED = 1.7;
+const particles = [];
+const mouse = { x: -1e4, y: -1e4, active: false };
+let hue = 200;            // base palette hue
+let t = 0;
+let bang = 0;             // big-bang energy, 1 -> 0; while >0 the flow field yields to the explosion
+let shake = 0;            // screen-shake energy, decays each frame
+const rings = [];         // expanding aftershock shockwaves
+
+// breathing cycle: drift in the field, then gravity drags everything home, then bang
+let phase = 'flow';       // 'flow' | 'collapse'
+let phaseT = 0;
+let collapse = 0;         // 0 -> 1 inward-gravity strength during the collapse phase
+const FLOW_FRAMES = 600;  // ~10s adrift before the inhale begins
+const COLLAPSE_FRAMES = 150;
+
+// --- audio / mic reactivity ---
+let micActive = false;
+let audioCtx, analyser, freqData;
+let bassAvg = 0;          // adaptive baseline for beat detection
+let levelSmooth = 0;      // overall loudness, smoothed -> drives field energy
+let beatCooldown = 0, bigCooldown = 0;
+
+function spawn(p) {
+  p.x = Math.random() * W;
+  p.y = Math.random() * H;
+  p.px = p.x; p.py = p.y;
+  p.vx = 0; p.vy = 0;
+  p.life = 60 + Math.random() * 240;
+}
+for (let i = 0; i < NUM; i++) { const p = {}; spawn(p); particles.push(p); }
+
+// collapse all particles to the centre, then hurl them outward
+function bigBang() {
+  // flash the canvas to white-hot, then let the trails fade back in
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  ctx.fillRect(0, 0, W, H);
+  const cx = W / 2, cy = H / 2;
+  for (let i = 0; i < NUM; i++) {
+    const p = particles[i];
+    const a = Math.random() * Math.PI * 2;
+    const r = 14 + Math.pow(Math.random(), 0.5) * 22; // varied muzzle speeds -> shockwave depth
+    p.x = cx; p.y = cy; p.px = cx; p.py = cy;
+    p.vx = Math.cos(a) * r;
+    p.vy = Math.sin(a) * r;
+    p.life = 200 + Math.random() * 260;
+  }
+  bang = 1;
+  shake = 1;
+  hue = (hue + 47) % 360;
+  // three staggered shockwave rings
+  rings.length = 0;
+  for (let k = 0; k < 3; k++) rings.push({ r: 0, alpha: 1, delay: k * 9 });
+  // reset the breathing cycle back to drift
+  phase = 'flow'; phaseT = 0; collapse = 0;
+}
+
+// a beat-driven pop: shockwave ring + outward pump from centre, scaled by loudness
+function pulse(intensity) {
+  shake = Math.max(shake, 0.4 * intensity);
+  bang = Math.max(bang, 0.22 * intensity);   // brief bloom + brighter strokes
+  rings.push({ r: 0, alpha: Math.min(1, 0.55 * intensity), delay: 0 });
+  hue = (hue + 7 * intensity) % 360;
+  const cx = W / 2, cy = H / 2;
+  const n = (35 * intensity) | 0;
+  for (let i = 0; i < n; i++) {
+    const p = particles[(Math.random() * NUM) | 0];
+    const dx = p.x - cx, dy = p.y - cy, d = Math.hypot(dx, dy) + 0.001;
+    const r = 4 + Math.random() * 6 * intensity;
+    p.vx += (dx / d) * r; p.vy += (dy / d) * r;
+  }
+}
+
+// --- mic capture: tap into the room's audio and react to it ---
+const micEl = document.getElementById('mic');
+const micLabel = document.getElementById('micLabel');
+async function toggleMic() {
+  if (micActive) {
+    micActive = false;
+    micEl.classList.remove('show');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    const src = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.7;
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    src.connect(analyser);
+    micActive = true;
+    bassAvg = 0; levelSmooth = 0;
+    micEl.classList.remove('err');
+    micLabel.textContent = 'listening to the room';
+    micEl.classList.add('show');
+  } catch (err) {
+    micEl.classList.add('show', 'err');
+    micLabel.textContent = 'mic blocked — allow access (or serve over http)';
+  }
+}
+
+// read the spectrum each frame; detect beats; feed energy into the visuals
+function readAudio() {
+  if (!micActive || !analyser) return;
+  analyser.getByteFrequencyData(freqData);
+  let bass = 0; for (let i = 1; i <= 8; i++) bass += freqData[i]; bass /= 8;
+  let lvl = 0;  for (let i = 0; i < 64; i++) lvl += freqData[i]; lvl /= 64;
+  levelSmooth = levelSmooth * 0.85 + (lvl / 255) * 0.15;
+  bassAvg = bassAvg * 0.94 + bass * 0.06;
+  if (beatCooldown > 0) beatCooldown--;
+  if (bigCooldown > 0) bigCooldown--;
+  // a beat = bass spikes well above its recent baseline
+  if (bass > 26 && bass > bassAvg * 1.4 && beatCooldown <= 0) {
+    const intensity = Math.min(2.4, bass / (bassAvg + 1));
+    if (intensity > 1.9 && bigCooldown <= 0) { bigBang(); bigCooldown = 75; }
+    else pulse(intensity);
+    beatCooldown = 8;
+  }
+}
+
+function step() {
+  t += 1;
+  readAudio();
+
+  // --- screen shake: jitter the whole canvas transform, decaying ---
+  if (shake > 0) shake *= 0.9;
+  const sx = shake > 0.01 ? (noise(t * 0.7, 11.5) * 18 * shake) : 0;
+  const sy = shake > 0.01 ? (noise(t * 0.7, 91.7) * 18 * shake) : 0;
+  ctx.setTransform(DPR, 0, 0, DPR, sx * DPR, sy * DPR);
+
+  // --- breathing cycle: drift, then inhale toward centre, then auto-bang ---
+  phaseT++;
+  if (phase === 'flow') {
+    collapse = 0;
+    // while the music drives things, skip the automatic inhale/bang
+    if (phaseT > FLOW_FRAMES && !micActive) { phase = 'collapse'; phaseT = 0; }
+  } else { // collapse
+    collapse = Math.min(1, phaseT / COLLAPSE_FRAMES);
+    if (phaseT > COLLAPSE_FRAMES) { bigBang(); }   // bigBang resets phase -> flow
+  }
+
+  // fade the whole canvas slightly -> glowing trails (over-cover for shake offset)
+  ctx.fillStyle = 'rgba(5, 6, 10, 0.055)';
+  ctx.fillRect(-30, -30, W + 60, H + 60);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineWidth = 1.1 + bang * 1.4 + levelSmooth * 2.2;   // louder music -> brighter strokes
+  if (bang > 0) bang *= 0.965;        // explosion energy decays back toward the flow field
+
+  const cx = W / 2, cy = H / 2;
+
+  for (let i = 0; i < NUM; i++) {
+    const p = particles[i];
+    // flow field angle from layered noise, slowly evolving in time
+    const n = noise(p.x * SCALE, p.y * SCALE + t * 0.0009);
+    const angle = n * Math.PI * 3;
+    const drive = SPEED * (1 + levelSmooth * 1.7);  // louder music -> faster flow
+    let ax = Math.cos(angle) * drive;
+    let ay = Math.sin(angle) * drive;
+
+    // during a big bang the flow field gives way to raw outward momentum
+    if (bang > 0.01) { ax *= (1 - bang); ay *= (1 - bang); }
+
+    // during the collapse phase, gravity drags particles spiralling home
+    if (collapse > 0.01) {
+      const gx = cx - p.x, gy = cy - p.y;
+      const gd = Math.hypot(gx, gy) + 0.001;
+      const g = collapse * 3.2;
+      ax = ax * (1 - collapse) + (gx / gd) * g - (gy / gd) * g * 0.6; // inward + swirl
+      ay = ay * (1 - collapse) + (gy / gd) * g + (gx / gd) * g * 0.6;
+    }
+
+    // mouse swirl + attraction
+    if (mouse.active) {
+      const dx = mouse.x - p.x, dy = mouse.y - p.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < 260 * 260) {
+        const d = Math.sqrt(d2) + 0.001;
+        const pull = (1 - d / 260) * 2.4;
+        ax += (dx / d) * pull - (dy / d) * pull * 1.3; // tangential -> swirl
+        ay += (dy / d) * pull + (dx / d) * pull * 1.3;
+      }
+    }
+
+    p.vx = p.vx * 0.86 + ax * 0.14;
+    p.vy = p.vy * 0.86 + ay * 0.14;
+    p.px = p.x; p.py = p.y;
+    p.x += p.vx; p.y += p.vy;
+
+    // colour by speed + position, around the current palette hue
+    const sp = Math.min(Math.hypot(p.vx, p.vy), 6);
+    const h = (hue + p.x * 0.05 + sp * 14) % 360;
+    const l = 45 + sp * 7;
+    ctx.strokeStyle = `hsla(${h}, 90%, ${l}%, 0.55)`;
+    ctx.beginPath();
+    ctx.moveTo(p.px, p.py);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+
+    if (--p.life < 0 || p.x < -20 || p.x > W + 20 || p.y < -20 || p.y > H + 20) {
+      spawn(p);
+    }
+  }
+
+  // --- central bloom: a hot glow at the core that fades with the blast ---
+  if (bang > 0.02) {
+    const rad = 220 * bang;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+    g.addColorStop(0, `hsla(${hue}, 100%, 80%, ${0.5 * bang})`);
+    g.addColorStop(0.4, `hsla(${hue}, 95%, 60%, ${0.18 * bang})`);
+    g.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // --- aftershock rings: staggered shockwaves expanding from the core ---
+  for (let k = rings.length - 1; k >= 0; k--) {
+    const ring = rings[k];
+    if (ring.delay > 0) { ring.delay--; continue; }
+    ring.r += 11;
+    ring.alpha *= 0.955;
+    ctx.lineWidth = 2.5 * ring.alpha + 0.5;
+    ctx.strokeStyle = `hsla(${hue}, 90%, 70%, ${ring.alpha * 0.7})`;
+    ctx.beginPath(); ctx.arc(cx, cy, ring.r, 0, Math.PI * 2); ctx.stroke();
+    if (ring.alpha < 0.03 || ring.r > Math.hypot(W, H)) rings.splice(k, 1);
+  }
+
+  ctx.globalCompositeOperation = 'source-over';
+  requestAnimationFrame(step);
+}
+
+// --- interaction ----------------------------------------------------------
+function setMouse(e) {
+  const tch = e.touches ? e.touches[0] : e;
+  mouse.x = tch.clientX; mouse.y = tch.clientY; mouse.active = true;
+  fadeHint();
+}
+window.addEventListener('mousemove', setMouse);
+window.addEventListener('touchmove', e => { setMouse(e); e.preventDefault(); }, { passive: false });
+window.addEventListener('mouseout', () => mouse.active = false);
+
+function burst(x, y) {
+  for (let i = 0; i < 180; i++) {
+    const p = particles[(Math.random() * NUM) | 0];
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.random() * 8;
+    p.x = x; p.y = y; p.px = x; p.py = y;
+    p.vx = Math.cos(a) * r; p.vy = Math.sin(a) * r;
+    p.life = 120 + Math.random() * 120;
+  }
+  hue = (hue + 35) % 360;
+}
+window.addEventListener('mousedown', e => burst(e.clientX, e.clientY));
+window.addEventListener('touchstart', e => {
+  const tc = e.touches[0]; burst(tc.clientX, tc.clientY); fadeHint();
+});
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') { hue = (hue + 60) % 360; e.preventDefault(); }
+  if (e.code === 'KeyB') { bigBang(); fadeHint(); }
+  if (e.code === 'KeyM') { toggleMic(); fadeHint(); }
+});
+
+let hintFaded = false;
+function fadeHint() {
+  if (hintFaded) return;
+  hintFaded = true;
+  setTimeout(() => document.getElementById('hint').classList.add('fade'), 2500);
+}
+
+resize();
+step();
+setTimeout(bigBang, 250);   // open with a bang
+</script>
+</body>
+</html>
