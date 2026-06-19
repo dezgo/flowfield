@@ -220,6 +220,9 @@ function stopCapture() {
   captureStream = null;
   captureMode = null;
   micActive = false;
+  // reset audio-derived energy so the visuals return to the crisp baseline
+  // (levelSmooth feeds line width + flow speed; if left frozen it stays coarse)
+  levelSmooth = 0; bassAvg = 0; fluxAvg = 0; ambient = 0;
   micEl.classList.remove('show', 'err');
 }
 
